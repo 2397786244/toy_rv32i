@@ -1,0 +1,5 @@
+{
+    "name": "rv32_cpu",
+    "includedFiles": ["ImmGen.v"],
+    "testBenches":["ImmGen_tb.v"]
+}
