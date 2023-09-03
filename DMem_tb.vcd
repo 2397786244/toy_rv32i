@@ -1,0 +1,108 @@
+$date
+	Sun Sep 03 16:38:44 2023
+$end
+$version
+	Icarus Verilog
+$end
+$timescale
+	1s
+$end
+$scope module DMem_tb $end
+$var wire 1 ! rdy $end
+$var wire 32 " out [31:0] $end
+$var reg 32 # addr [31:0] $end
+$var reg 1 $ clk $end
+$var reg 1 % ren $end
+$var reg 1 & rst_n $end
+$var reg 32 ' wd [31:0] $end
+$var reg 1 ( wen $end
+$scope module _inst_test_dmem $end
+$var wire 32 ) addr [31:0] $end
+$var wire 1 $ clk $end
+$var wire 1 % ren $end
+$var wire 1 & rst_n $end
+$var wire 32 * wd [31:0] $end
+$var wire 1 ( wen $end
+$var reg 1 ! dmem_rdy $end
+$var reg 32 + rd_out [31:0] $end
+$var integer 32 , i [31:0] $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+$comment Show the parameter values. $end
+$dumpall
+$end
+#0
+$dumpvars
+bx ,
+b0 +
+b0 *
+b0 )
+0(
+b0 '
+1&
+0%
+0$
+b0 #
+b0 "
+0!
+$end
+#1
+b100000000 ,
+0&
+1$
+#2
+1&
+0$
+#3
+1$
+#4
+b1100100 '
+b1100100 *
+b1000 #
+b1000 )
+0$
+#5
+1(
+1$
+#6
+0$
+#7
+0(
+1$
+#8
+0$
+#9
+1$
+#10
+0$
+#11
+b1100100 "
+b1100100 +
+1%
+1$
+#12
+0$
+#13
+0%
+1$
+#14
+0$
+#15
+1$
+#16
+0$
+#17
+1$
+#18
+0$
+#19
+1$
+#20
+0$
+#21
+1$
+#22
+0$
+#23
+1$

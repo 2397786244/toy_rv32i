@@ -1,11 +1,15 @@
 module Top_tb();
 reg clk=0;
-always #1 clk=~clk;
+reg rst_n=1;
+always #2 clk=~clk;
 
 CPU_Top _inst_cpu_top(
-    clk
+    clk,
+    rst_n
 );
 initial begin
+        rst_n <= 0;
+        #2 rst_n <= 1;
         #1000 $finish;
 end
 

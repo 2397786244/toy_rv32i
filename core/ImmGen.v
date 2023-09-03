@@ -1,6 +1,6 @@
 module ImmGen(
     input [31:0] instr,
-    output reg [31:0] imm
+    output reg [31:0] imm=0
 );
 
 wire  [2:0]  opcode_sel;  // I type(instr[31:20])  S type (instr[31:25],instr[11:7])
