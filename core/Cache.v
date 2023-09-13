@@ -208,12 +208,18 @@ localparam CACHE_STATE_WRITE_BACK=6;  //将某一block写回Mem.
 localparam CACHE_STATE_GET_SEL=7;
 localparam CACHE_STATE_WR_PROCESS=8;
 localparam CACHE_STATE_RD_PROCESS=9;
+localparam CACHE_STATE_MISS_WRITE_WAIT=10;
+localparam CACHE_STATE_WB_LINE=11;
 
 reg [3:0] cache_state=CACHE_STATE_GET_SEL;
-reg [31:0] mem_recv_buf=0;
-wire [7:0] data_addr = {4'b0,addr[3:0]};
+reg [3:0] cache_next_state=CACHE_STATE_WRMISS_NOWR;
+reg [DATA_OFFSET-1:0] mem_recv_buf=0;
+wire [9:0] data_addr = {4'b0,addr[5:0]};
 
 wire [2:0] selected_way;
+reg [3:0] miss_rd_cnt=0;
+reg [3:0] miss_wr_cnt=0;
+
 reg miss_s=0;
 reg hit_s=0;
 PLRU _inst_lru(
@@ -286,13 +292,22 @@ always @(posedge clk or negedge rst_n) begin
                     else begin
                         out_data<=out_data;
                         data_rdy<=0;
+                        enable<=1;
+                        r_w<=0;
+                        mem_addr<={addr[31:6],6'b000000};
                         if(_cache[decode_index][selected_way][SLOT_OFFSET-1]==0
                         ||_cache[decode_index][selected_way][SLOT_OFFSET-1:SLOT_OFFSET-2]==2'b10) begin
-                            cache_state<=CACHE_STATE_WRMISS_NOWR;
+                            //cache_state<=CACHE_STATE_WRMISS_NOWR;
+                            cache_state<=CACHE_STATE_MISS_WRITE_WAIT;
+                            cache_next_state<=CACHE_STATE_WRMISS_NOWR;
                         end
                         else if(_cache[decode_index][selected_way][SLOT_OFFSET-1:SLOT_OFFSET-2]==2'b11) begin
-                            cache_state<=CACHE_STATE_WRITE_BACK;
+                            //cache_state<=CACHE_STATE_WRITE_BACK;
+                            cache_state<=CACHE_STATE_MISS_WRITE_WAIT;
+                            cache_next_state<=CACHE_STATE_WRITE_BACK;
+
                         end
+                        miss_rd_cnt<=0;
                     end
                 end
             end  //STATE_WR_PROCESS
@@ -320,7 +335,7 @@ always @(posedge clk or negedge rst_n) begin
                     else begin
                         enable<=1;
                         r_w<=0;
-                        mem_addr<=addr;
+                        mem_addr<={addr[31:6],6'b000000};
                         cache_state<=CACHE_STATE_MISS_READ_WAIT;
                         data_rdy<=0;
                     end
@@ -330,49 +345,67 @@ always @(posedge clk or negedge rst_n) begin
 
             CACHE_STATE_MISS_READ_WAIT:
             begin
-                if(mem_op_finish) begin
-                    mem_recv_buf<=rd_from_mem;
+                if(miss_rd_cnt==4'b1111&&mem_op_finish)
+                begin
+                    mem_recv_buf<={rd_from_mem,mem_recv_buf[DATA_OFFSET-1:32]};
                     enable<=0;
                     r_w<=0;
+                    miss_rd_cnt<=0;
                     cache_state<=CACHE_STATE_MISS_READ_PROCESS;
+                end
+                //从Mem连续读取16次4字节长度的数据
+                else if(mem_op_finish) begin
+                    mem_addr<=mem_addr+4;
+                    miss_rd_cnt<=miss_rd_cnt+1;
+                    mem_recv_buf<={rd_from_mem,mem_recv_buf[DATA_OFFSET-1:32]};
+                    enable<=1;
+                    r_w<=0;
+                    cache_state<=CACHE_STATE_MISS_READ_WAIT;
                 end
                 else
                     cache_state<=CACHE_STATE_MISS_READ_WAIT;
             end  //CACHE_STATE_MISS_READ_WAIT
-            CACHE_STATE_MISS_READ_PROCESS:begin
-                out_data<=mem_recv_buf;
 
+            CACHE_STATE_MISS_READ_PROCESS:begin
+                out_data<=mem_recv_buf[data_addr<<3+:32];
                 if(_cache[decode_index][selected_way][SLOT_OFFSET-1:SLOT_OFFSET-2]==2'b11) begin
-                    cache_state<=CACHE_STATE_CONFLICT_WB;
+                    enable<=0;
+                    r_w<=1;
+                    mem_addr<={_cache[decode_index][selected_way][DATA_OFFSET+:TAG_BIT_SIZE],decode_index,6'b000000};
+                    wr_to_mem <= _cache[decode_index][selected_way][0+:32];
+                    mem_recv_buf <= {32'b0,_cache[decode_index][selected_way][DATA_OFFSET-1:32]};
+                    cache_state<=CACHE_STATE_WB_LINE;//写回冲突的一整行
+                    cache_next_state<=CACHE_STATE_CONFLICT_WB;//存储当前数据
                     data_rdy<=0;
                 end
                 else begin
                     _cache[decode_index][selected_way][SLOT_OFFSET-1:SLOT_OFFSET-2]<={1'b1,1'b0};
                     _cache[decode_index][selected_way][DATA_OFFSET+:TAG_BIT_SIZE]<=addr[BLOCK_DATA_BYTE_SIZE+INDEX_BIT_SIZE+:TAG_BIT_SIZE];
-                    _cache[decode_index][selected_way][data_addr<<3+:32]<=mem_recv_buf;
+                    _cache[decode_index][selected_way][0+:DATA_OFFSET]<=mem_recv_buf;
                     data_rdy<=1;
                     cache_state<=CACHE_STATE_GET_SEL;
                 end
             end
             CACHE_STATE_CONFLICT_WB:begin
+                //CONFLICT_WB和WRITE_BACK状态都需要写回一行数据.
                 //写回 _cache[decode_index][slot_ptr[decode_index]]
-                if(mem_op_finish) begin
-                    enable<=0;
-                    r_w<=0;
-                    _cache[decode_index][selected_way][SLOT_OFFSET-1:SLOT_OFFSET-2]<={1'b1,1'b0};
-                    _cache[decode_index][selected_way][DATA_OFFSET+:TAG_BIT_SIZE]<=addr[BLOCK_DATA_BYTE_SIZE+INDEX_BIT_SIZE+:TAG_BIT_SIZE];
-                    _cache[decode_index][selected_way][data_addr<<3+:32]<=mem_recv_buf;
-                    data_rdy<=1;
-                    cache_state<=CACHE_STATE_GET_SEL;
-                end
-                else begin
-                    enable<=1;
-                    r_w<=1;
-                    data_rdy<=0;
-                    wr_to_mem<=_cache[decode_index][selected_way][data_addr<<3+:32];
-                    mem_addr<=addr;
-                    cache_state<=CACHE_STATE_CONFLICT_WB;
-                end
+                // if(mem_op_finish) begin
+                enable<=0;
+                r_w<=0;
+                _cache[decode_index][selected_way][SLOT_OFFSET-1:SLOT_OFFSET-2]<={1'b1,1'b0};
+                _cache[decode_index][selected_way][DATA_OFFSET+:TAG_BIT_SIZE]<=addr[BLOCK_DATA_BYTE_SIZE+INDEX_BIT_SIZE+:TAG_BIT_SIZE];
+                _cache[decode_index][selected_way][0+:DATA_OFFSET]<=mem_recv_buf;
+                data_rdy<=1;
+                cache_state<=CACHE_STATE_GET_SEL;
+                // end
+                // else begin
+                //     enable<=1;
+                //     r_w<=1;
+                //     data_rdy<=0;
+                //     wr_to_mem<=_cache[decode_index][selected_way][data_addr<<3+:32];
+                //     mem_addr<=addr;
+                //     cache_state<=CACHE_STATE_CONFLICT_WB;
+                // end
             end
             CACHE_STATE_WRMISS_NOWR: //如果miss,可能是第一次访问的compulsory miss(validBit=0)，不需要写回(replacement)，直接存储
             begin//或者写入发生conflict，但是被replacement的slot的dirtybit为0不需要被写回。
@@ -384,27 +417,78 @@ always @(posedge clk or negedge rst_n) begin
                 data_rdy<=1;
                 cache_state<=CACHE_STATE_GET_SEL;
             end
-            CACHE_STATE_WRITE_BACK:
+            CACHE_STATE_WRITE_BACK:begin
             //也可能是发生了conflict miss，判断dirtyBit是否需要写回，然后存储
+            // begin
+            //     if(mem_op_finish) begin
+                    //一行被写回mem之后,存入新的数据.
+                enable<=0;
+                r_w<=0;
+                _cache[decode_index][selected_way][SLOT_OFFSET-1:SLOT_OFFSET-2]<={1'b1,1'b1};
+                _cache[decode_index][selected_way][DATA_OFFSET+:TAG_BIT_SIZE]<=addr[BLOCK_DATA_BYTE_SIZE+INDEX_BIT_SIZE+:TAG_BIT_SIZE];
+                _cache[decode_index][selected_way][data_addr<<3+:32]<=in_data;
+                data_rdy<=1;
+                cache_state<=CACHE_STATE_GET_SEL;
+                // end
+                // else begin
+                //     mem_addr<=addr;
+                //     data_rdy<=0;
+                //     wr_to_mem<=_cache[decode_index][selected_way][data_addr<<3+:32];
+                //     enable<=1;
+                //     r_w<=1;
+                //     cache_state<=CACHE_STATE_WRITE_BACK;
+                // end
+            end
+            CACHE_STATE_MISS_WRITE_WAIT:
             begin
-                if(mem_op_finish) begin
+                if(miss_rd_cnt==4'b1111&&mem_op_finish)
+                begin
+                    _cache[decode_index][selected_way][0+:DATA_OFFSET]<={rd_from_mem,mem_recv_buf[DATA_OFFSET-1:32]};
+                    miss_rd_cnt<=0;
+                    if(cache_next_state==CACHE_STATE_WRITE_BACK)begin
+                        enable<=1;
+                        r_w<=1;
+                        mem_addr<={_cache[decode_index][selected_way][DATA_OFFSET+:TAG_BIT_SIZE],decode_index,6'b000000};
+                        wr_to_mem <= _cache[decode_index][selected_way][0+:32];
+                        mem_recv_buf <= {32'b0,_cache[decode_index][selected_way][DATA_OFFSET-1:32]};
+                        cache_state<=CACHE_STATE_WB_LINE;
+                        cache_next_state<=CACHE_STATE_WRITE_BACK;
+                    end
+                    else begin
+                        cache_state<=cache_next_state;  //NOWR
+                    end
+                end
+                //从Mem连续读取16次4字节长度的数据
+                else if(mem_op_finish) begin
+                    mem_addr<=mem_addr+4;
+                    miss_rd_cnt<=miss_rd_cnt+1;
+                    mem_recv_buf<={rd_from_mem,mem_recv_buf[DATA_OFFSET-1:32]};
+                    enable<=1;
+                    r_w<=0;
+                    cache_state<=CACHE_STATE_MISS_WRITE_WAIT;
+                end
+                else
+                    cache_state<=CACHE_STATE_MISS_WRITE_WAIT;
+            end  //CACHE_STATE_MISS_WRITE_WAIT
+            CACHE_STATE_WB_LINE:begin
+                if(miss_wr_cnt==4'b1111&&mem_op_finish)begin
                     enable<=0;
                     r_w<=0;
-                    _cache[decode_index][selected_way][SLOT_OFFSET-1:SLOT_OFFSET-2]<={1'b1,1'b1};
-                    _cache[decode_index][selected_way][DATA_OFFSET+:TAG_BIT_SIZE]<=addr[BLOCK_DATA_BYTE_SIZE+INDEX_BIT_SIZE+:TAG_BIT_SIZE];
-                    _cache[decode_index][selected_way][data_addr<<3+:32]<=in_data;
-                    data_rdy<=1;
-                    cache_state<=CACHE_STATE_GET_SEL;
+                    miss_wr_cnt<=0;
+                    cache_state<=cache_next_state;
                 end
-                else begin
-                    mem_addr<=addr;
-                    data_rdy<=0;
-                    wr_to_mem<=_cache[decode_index][selected_way][data_addr<<3+:32];
+                else if(mem_op_finish)begin
                     enable<=1;
                     r_w<=1;
-                    cache_state<=CACHE_STATE_WRITE_BACK;
+                    mem_addr<=mem_addr+4;
+                    miss_wr_cnt<=miss_wr_cnt+1;
+                    wr_to_mem <= mem_recv_buf[0+:32];
+                    mem_recv_buf <= mem_recv_buf>>32;
+                    data_rdy<=0;
+                    cache_state<=CACHE_STATE_WB_LINE;
                 end
-
+                else
+                    cache_state<=CACHE_STATE_WB_LINE;
             end
         endcase
     end

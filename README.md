@@ -16,6 +16,7 @@
     + ImmGen.v
     + InstrDiff.v
     + WB_Mux.v
+    + Cache.v
 + testbench
 + periph
     + uart
